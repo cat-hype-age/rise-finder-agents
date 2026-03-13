@@ -57,6 +57,23 @@ class SupabaseClient:
             logger.error(f"Supabase RPC error on {function_name}: {e}")
             raise
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    async def table_select_paginated(self, table: str, query: str = "*", limit: int = 100, offset: int = 0, order_by: Optional[str] = None, filters: Optional[dict] = None):
+        """Select with offset pagination and total count."""
+        try:
+            q = self._client.table(table).select(query, count="exact")
+            if filters:
+                for key, value in filters.items():
+                    q = q.eq(key, value)
+            if order_by:
+                q = q.order(order_by, desc=True)
+            q = q.range(offset, offset + limit - 1)
+            result = q.execute()
+            return result.data, result.count
+        except Exception as e:
+            logger.error(f"Supabase paginated select error on {table}: {e}")
+            raise
+
     def raw(self):
         return self._client
 

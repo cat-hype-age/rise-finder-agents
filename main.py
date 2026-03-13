@@ -271,19 +271,21 @@ async def get_scores(
         from core.supabase_client import get_client
         sb = get_client()
         offset = (page - 1) * per_page
-        results = await sb.table_select(
+        results, total = await sb.table_select_paginated(
             "composite_scores",
             query="*",
             limit=per_page,
+            offset=offset,
             order_by="composite_score",
         )
         return {
             "page": page,
             "per_page": per_page,
+            "total": total,
             "results": results or [],
         }
     except Exception as e:
-        return {"page": page, "per_page": per_page, "results": [], "error": str(e)}
+        return {"page": page, "per_page": per_page, "total": 0, "results": [], "error": str(e)}
 
 
 @app.get("/scores/{project_name}")
