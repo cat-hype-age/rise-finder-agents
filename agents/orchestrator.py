@@ -50,20 +50,10 @@ class Orchestrator:
         start_time = time.time()
         has_partial = False
 
-        # Log query
-        try:
-            sb = get_client()
-            await sb.table_insert("investor_query_log", {
-                "query_id": query_id,
-                "categories": query.categories,
-                "limit": query.limit,
-                "risk_profile": query.risk_profile,
-                "stage_preference": query.stage_preference,
-                "bot_profile_name": query.bot_profile_name,
-                "status": "processing",
-            })
-        except Exception as e:
-            logger.warning(f"Failed to log query: {e}")
+        # Log query (investor_query_log table does not exist in Supabase yet;
+        # log locally only for now)
+        logger.info(f"Query {query_id}: categories={query.categories}, "
+                     f"limit={query.limit}, bot={query.bot_profile_name}")
 
         # Step 1: GitHub scan with timeout
         github_results = []
@@ -167,16 +157,64 @@ class Orchestrator:
         scored_projects.sort(key=lambda x: x["composite_score"], reverse=True)
         top = scored_projects[:query.limit]
 
-        # Write to composite_scores table
+        # Write to composite_scores table (38-column schema, all scores INTEGER,
+        # recommendation is enum: strong_buy, buy, watch, pass)
         try:
             sb = get_client()
-            for project in top:
+            for rank_idx, project in enumerate(top, 1):
+                gh = project["github"]
+                soc = project["social"]
+                enr = project["enrichment"]
+                det = project["detailed_scores"]
+                comp = int(round(project["composite_score"]))
+
+                # Map composite score to recommendation enum
+                if comp >= 80:
+                    rec = "strong_buy"
+                elif comp >= 60:
+                    rec = "buy"
+                elif comp >= 40:
+                    rec = "watch"
+                else:
+                    rec = "pass"
+
                 await sb.table_upsert("composite_scores", {
                     "project_name": project["project_name"],
-                    "composite_score": project["composite_score"],
-                    "detailed_scores": project["detailed_scores"],
-                    "has_partial_data": project["has_partial_data"],
-                    "query_id": query_id,
+                    "project_url": gh.get("project_url", ""),
+                    "category": ", ".join(gh.get("topics", [])[:3]) or "Technology",
+                    "composite_score": comp,
+                    "rank": rank_idx,
+                    "github_score": int(round(det.get("developer_momentum", 0) * 1.6)),  # scale 0-25 → 0-40
+                    "social_score": int(round(det.get("community_buzz", 0) * 1.5)),       # scale 0-20 → 0-30
+                    "enrichment_score": int(round(det.get("business_traction", 0) * 0.8)), # scale 0-25 → 0-20
+                    "scored_at": datetime.now(timezone.utc).isoformat(),
+                    "velocity_flag": det.get("velocity_flag", False),
+                    "anomaly_flag": det.get("anomaly_flag", False),
+                    "description": (gh.get("description", "") or "")[:500],
+                    "recommendation": rec,
+                    # Detailed metric columns
+                    "dev_momentum_score": int(round(det.get("developer_momentum", 0))),
+                    "adoption_score": int(round(det.get("business_traction", 0))),
+                    "community_buzz_score": int(round(det.get("community_buzz", 0))),
+                    "velocity_score": int(round(det.get("market_timing", 0))),
+                    "stars": gh.get("stars", 0),
+                    "forks": gh.get("forks", 0),
+                    "open_issues": 0,
+                    "star_delta_7d": int(round(gh.get("star_velocity_7d", 0))),
+                    "star_delta_30d": int(round(gh.get("star_velocity_30d", 0))),
+                    "star_delta_90d": 0,
+                    "commit_activity_30d": 0,
+                    "pr_count_30d": 0,
+                    "npm_downloads_weekly": 0,
+                    "pypi_downloads_weekly": 0,
+                    "docker_pulls": 0,
+                    "download_delta_7d": 0,
+                    "download_delta_30d": 0,
+                    "reddit_mentions": soc.get("reddit_posts_7d", 0),
+                    "reddit_score": int(round(soc.get("reddit_avg_score", 0))),
+                    "twitter_mentions": soc.get("x_mentions_7d", 0),
+                    "twitter_engagement": 0,
+                    "hn_points": soc.get("hn_total_points", 0),
                 })
         except Exception as e:
             logger.warning(f"Failed to write composite scores: {e}")
@@ -187,18 +225,8 @@ class Orchestrator:
                 self._safe_memo_generate(project["project_name"], project)
             )
 
-        # Update query status
+        # Log completion
         elapsed = round((time.time() - start_time) * 1000, 2)
-        try:
-            sb = get_client()
-            await sb.table_upsert("investor_query_log", {
-                "query_id": query_id,
-                "status": "completed",
-                "results_count": len(top),
-                "processing_time_ms": elapsed,
-            })
-        except Exception:
-            pass
 
         update_agent_last_run("orchestrator")
         logger.info(f"Query {query_id} completed: {len(top)} results in {elapsed:.0f}ms")

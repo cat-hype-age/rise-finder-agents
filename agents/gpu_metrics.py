@@ -132,7 +132,6 @@ class GPUMetricsCollector:
                             "vram_total_mb": metrics["vram_total_mb"],
                             "power_draw_w": metrics["power_draw_w"],
                             "temperature_c": metrics["temperature_c"],
-                            "is_mock": metrics["is_mock"],
                         })
                     except Exception as e:
                         logger.debug(f"GPU metrics DB write skipped: {e}")

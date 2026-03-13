@@ -273,21 +273,31 @@ class MemoGenerator:
             model_used=model,
         )
 
-        # Write to Supabase
+        # Write to Supabase (schema: no raw_text or model_used columns;
+        # recommendation is enum: strong_buy, buy, watch, pass)
         try:
             sb = get_client()
+            # Map recommendation text to enum value
+            rec_text = (memo.recommendation or "").lower()
+            if "strong buy" in rec_text:
+                rec_enum = "strong_buy"
+            elif "buy" in rec_text:
+                rec_enum = "buy"
+            elif "watch" in rec_text:
+                rec_enum = "watch"
+            else:
+                rec_enum = "pass"
+
             await sb.table_upsert("memos", {
                 "project_name": project_name,
                 "summary": memo.summary,
-                "recommendation": memo.recommendation,
+                "recommendation": rec_enum,
                 "risk_factors": memo.risk_factors,
                 "bull_case": memo.bull_case,
                 "bear_case": memo.bear_case,
-                "raw_text": memo.raw_text,
-                "inference_time_ms": memo.inference_time_ms,
+                "inference_time_ms": int(round(memo.inference_time_ms)),
                 "tokens_used": memo.tokens_used,
                 "gpu_util_during": memo.gpu_util_during,
-                "model_used": memo.model_used,
             })
         except Exception as e:
             logger.warning(f"Failed to write memo to DB: {e}")

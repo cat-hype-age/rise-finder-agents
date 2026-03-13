@@ -247,15 +247,16 @@ class EnrichmentAgent:
                     continue
                 signals.append(result)
 
-        # Write to Supabase
+        # Write to Supabase (schema: no enrichment_score or data column;
+        # store enrichment results in readme_summary + contributor_count)
         try:
             sb = get_client()
             for signal in signals:
                 await sb.table_upsert("signals", {
                     "project_name": signal.project_name,
                     "source": "enrichment",
-                    "data": signal.to_dict(),
-                    "enrichment_score": signal.enrichment_score,
+                    "readme_summary": (signal.readme_summary or "")[:1000],
+                    "contributor_count": signal.contributor_count,
                 })
         except Exception as e:
             logger.warning(f"Failed to write enrichment signals to DB: {e}")

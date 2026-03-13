@@ -254,16 +254,19 @@ class GitHubScanner:
                     seen.add(signal.project_name)
                     all_signals.append(signal)
 
-        # Write to Supabase
+        # Write to Supabase (schema: id uuid, source, project_name, stars int,
+        # star_velocity_7d int, social_score int, readme_summary, contributor_count int,
+        # description, created_at)
         try:
             sb = get_client()
             for signal in all_signals[:50]:
                 await sb.table_upsert("signals", {
                     "project_name": signal.project_name,
                     "source": "github",
-                    "data": signal.to_dict(),
-                    "star_velocity_7d": signal.star_velocity_7d,
                     "stars": signal.stars,
+                    "star_velocity_7d": int(round(signal.star_velocity_7d)),
+                    "contributor_count": signal.contributor_count,
+                    "description": (signal.description or "")[:500],
                 })
         except Exception as e:
             logger.warning(f"Failed to write github signals to DB: {e}")

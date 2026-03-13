@@ -272,15 +272,14 @@ class SocialSignalAgent:
                 continue
             signals.append(result)
 
-        # Write to Supabase
+        # Write to Supabase (schema: social_score is INTEGER)
         try:
             sb = get_client()
             for signal in signals:
                 await sb.table_upsert("signals", {
                     "project_name": signal.project_name,
                     "source": "social",
-                    "data": signal.to_dict(),
-                    "social_score": signal.social_score,
+                    "social_score": int(round(signal.social_score)),
                 })
         except Exception as e:
             logger.warning(f"Failed to write social signals to DB: {e}")

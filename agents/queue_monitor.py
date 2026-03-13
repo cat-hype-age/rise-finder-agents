@@ -30,15 +30,8 @@ class QueueMonitor:
             from core.supabase_client import get_client
             sb = get_client()
 
-            # Try pgmq metrics
-            try:
-                result = await sb.rpc("pgmq_metrics", {"queue_name": "jobs"})
-                if result and isinstance(result, list) and len(result) > 0:
-                    m = result[0]
-                    queue_depth = m.get("queue_length", 0)
-                    total_processed = m.get("total_messages", 0)
-            except Exception:
-                pass
+            # pgmq is not installed on this Supabase instance;
+            # queue depth derived from bot_runs below instead
 
             # Get bot_runs from last 60s
             try:
@@ -109,11 +102,20 @@ class QueueMonitor:
                 if metrics.get("queue_depth", 0) > 50:
                     logger.warning(f"Queue alert: depth above 50 — queue_depth={metrics['queue_depth']}")
 
-                # Write to DB
+                # Write to DB (schema: no cumulative_runs or timestamp —
+                # timestamp auto-populates via DEFAULT now())
                 try:
                     from core.supabase_client import get_client
                     sb = get_client()
-                    await sb.table_insert("queue_metrics", metrics)
+                    db_row = {
+                        "queue_depth": metrics.get("queue_depth", 0),
+                        "total_processed": metrics.get("total_processed", 0),
+                        "total_failed": metrics.get("total_failed", 0),
+                        "runs_per_minute": metrics.get("runs_per_minute", 0),
+                        "avg_latency_ms": metrics.get("avg_latency_ms", 0),
+                        "success_rate_pct": metrics.get("success_rate_pct", 100),
+                    }
+                    await sb.table_insert("queue_metrics", db_row)
                 except Exception as e:
                     logger.debug(f"Queue metrics DB write skipped: {e}")
 
