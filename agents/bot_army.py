@@ -97,11 +97,11 @@ class BotArmy:
         if settings.BOT_ARMY_RAMP_FAST:
             elapsed_min = (time.time() - self._start_time) / 60
             if elapsed_min < 2:
-                return 10
+                return 5
             elif elapsed_min < 5:
-                return 20
+                return 10
             elif elapsed_min < 10:
-                return 30
+                return 20
             return settings.BOT_ARMY_MAX_CONCURRENT
         else:
             elapsed_min = (time.time() - self._start_time) / 60

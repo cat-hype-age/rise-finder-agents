@@ -277,6 +277,7 @@ async def get_scores(
             limit=per_page,
             offset=offset,
             order_by="composite_score",
+            neq_filters={"contact_email": ""},
         )
         return {
             "page": page,
