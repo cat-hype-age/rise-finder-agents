@@ -58,7 +58,20 @@ class SupabaseClient:
             raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-    async def table_select_paginated(self, table: str, query: str = "*", limit: int = 100, offset: int = 0, order_by: Optional[str] = None, filters: Optional[dict] = None, neq_filters: Optional[dict] = None):
+    async def table_batch_upsert(self, table: str, rows: list, batch_size: int = 50):
+        """Upsert rows in batches of batch_size."""
+        if not rows:
+            return
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            try:
+                self._client.table(table).upsert(batch).execute()
+            except Exception as e:
+                logger.error(f"Supabase batch upsert error on {table} (batch {i // batch_size + 1}): {e}")
+                raise
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    async def table_select_paginated(self, table: str, query: str = "*", limit: int = 100, offset: int = 0, order_by: Optional[str] = None, filters: Optional[dict] = None, neq_filters: Optional[dict] = None, gt_filters: Optional[dict] = None):
         """Select with offset pagination and total count."""
         try:
             q = self._client.table(table).select(query, count="exact")
@@ -68,6 +81,9 @@ class SupabaseClient:
             if neq_filters:
                 for key, value in neq_filters.items():
                     q = q.neq(key, value)
+            if gt_filters:
+                for key, value in gt_filters.items():
+                    q = q.gt(key, value)
             if order_by:
                 q = q.order(order_by, desc=True)
             q = q.range(offset, offset + limit - 1)

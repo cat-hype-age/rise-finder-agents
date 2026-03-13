@@ -287,15 +287,17 @@ class SocialSignalAgent:
                 continue
             signals.append(result)
 
-        # Write to Supabase (schema: social_score is INTEGER)
+        # Batch write to Supabase (schema: social_score is INTEGER)
         try:
             sb = get_client()
-            for signal in signals:
-                await sb.table_upsert("signals", {
-                    "project_name": signal.project_name,
-                    "source": "social",
-                    "social_score": int(round(signal.social_score)),
-                })
+            rows = [{
+                "project_name": s.project_name,
+                "source": "social",
+                "social_score": int(round(s.social_score)),
+            } for s in signals]
+            if rows:
+                await sb.table_batch_upsert("signals", rows)
+                logger.info(f"Batch wrote {len(rows)} social signals")
         except Exception as e:
             logger.warning(f"Failed to write social signals to DB: {e}")
 

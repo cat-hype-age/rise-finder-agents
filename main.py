@@ -62,6 +62,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Universe warm-up skipped: {e}")
 
+    # 3b. Warm dedup cache from DB (persistent dedup across restarts)
+    try:
+        from agents.github_scanner import GitHubScanner
+        _dedup_scanner = GitHubScanner()
+        await _dedup_scanner.warm_dedup_cache()
+    except Exception as e:
+        logger.warning(f"Dedup cache warm-up skipped: {e}")
+
     # 4. Start background tasks
     gpu_task = asyncio.create_task(collector.collect_loop())
     _background_tasks.append(gpu_task)
@@ -84,6 +92,31 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Bot army disabled")
 
+    # 6. Start APScheduler for independent periodic scans
+    scheduler = None
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        async def scheduled_full_scan():
+            """Independent periodic scan across all categories."""
+            try:
+                orch = get_orchestrator()
+                from agents.orchestrator import InvestorQuery
+                query = InvestorQuery(categories=[], limit=100)
+                result = await orch.handle_query(query)
+                logger.info(f"Scheduled scan complete: {result.results_count} results")
+            except Exception as e:
+                logger.error(f"Scheduled scan failed: {e}")
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(scheduled_full_scan, 'interval', hours=6, id='full_scan')
+        scheduler.start()
+        logger.info("APScheduler started: full scan every 6 hours")
+    except ImportError:
+        logger.warning("APScheduler not installed, skipping scheduled scans")
+    except Exception as e:
+        logger.warning(f"APScheduler setup failed: {e}")
+
     logger.info("Rise Finder Agent Swarm online. 8 agents active.")
 
     yield
@@ -94,6 +127,8 @@ async def lifespan(app: FastAPI):
     qm.stop()
     if bot_army_instance:
         bot_army_instance.stop()
+    if scheduler:
+        scheduler.shutdown(wait=False)
     for task in _background_tasks:
         task.cancel()
     _background_tasks.clear()
@@ -266,11 +301,15 @@ async def get_scores(
     request: Request,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=500),
+    scored_after: Optional[str] = Query(default=None, description="ISO timestamp to filter scores newer than"),
 ):
     try:
         from core.supabase_client import get_client
         sb = get_client()
         offset = (page - 1) * per_page
+        gt_filters = {}
+        if scored_after:
+            gt_filters["scored_at"] = scored_after
         results, total = await sb.table_select_paginated(
             "composite_scores",
             query="*",
@@ -278,6 +317,7 @@ async def get_scores(
             offset=offset,
             order_by="composite_score",
             neq_filters={"contact_email": ""},
+            gt_filters=gt_filters if gt_filters else None,
         )
         return {
             "page": page,

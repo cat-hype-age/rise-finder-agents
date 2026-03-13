@@ -167,6 +167,7 @@ class Orchestrator:
         # recommendation is enum: strong_buy, buy, watch, pass)
         try:
             sb = get_client()
+            composite_rows = []
             for rank_idx, project in enumerate(top, 1):
                 gh = project["github"]
                 soc = project["social"]
@@ -184,21 +185,20 @@ class Orchestrator:
                 else:
                     rec = "pass"
 
-                await sb.table_upsert("composite_scores", {
+                composite_rows.append({
                     "project_name": project["project_name"],
                     "project_url": gh.get("project_url", ""),
                     "category": ", ".join(gh.get("topics", [])[:3]) or "Technology",
                     "composite_score": comp,
                     "rank": rank_idx,
-                    "github_score": int(round(det.get("developer_momentum", 0) * 1.6)),  # scale 0-25 → 0-40
-                    "social_score": int(round(det.get("community_buzz", 0) * 1.5)),       # scale 0-20 → 0-30
-                    "enrichment_score": int(round(det.get("business_traction", 0) * 0.8)), # scale 0-25 → 0-20
+                    "github_score": int(round(det.get("developer_momentum", 0) * 1.6)),
+                    "social_score": int(round(det.get("community_buzz", 0) * 1.5)),
+                    "enrichment_score": int(round(det.get("business_traction", 0) * 0.8)),
                     "scored_at": datetime.now(timezone.utc).isoformat(),
                     "velocity_flag": det.get("velocity_flag", False),
                     "anomaly_flag": det.get("anomaly_flag", False),
                     "description": (gh.get("description", "") or "")[:500],
                     "recommendation": rec,
-                    # Detailed metric columns
                     "dev_momentum_score": int(round(det.get("developer_momentum", 0))),
                     "adoption_score": int(round(det.get("business_traction", 0))),
                     "community_buzz_score": int(round(det.get("community_buzz", 0))),
@@ -223,6 +223,9 @@ class Orchestrator:
                     "hn_points": soc.get("hn_total_points", 0),
                     "contact_email": enr.get("contact_email", ""),
                 })
+            if composite_rows:
+                await sb.table_batch_upsert("composite_scores", composite_rows)
+                logger.info(f"Batch wrote {len(composite_rows)} composite scores")
         except Exception as e:
             logger.warning(f"Failed to write composite scores: {e}")
 

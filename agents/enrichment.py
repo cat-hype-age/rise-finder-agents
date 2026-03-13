@@ -305,15 +305,16 @@ class EnrichmentAgent:
                 batch_signals.append(result)
                 signals.append(result)
 
-            # Progressive DB write after each batch
+            # Batch DB write after each batch
             try:
-                for signal in batch_signals:
-                    await sb.table_upsert("signals", {
-                        "project_name": signal.project_name,
-                        "source": "enrichment",
-                        "readme_summary": (signal.readme_summary or "")[:1000],
-                        "contributor_count": signal.contributor_count,
-                    })
+                rows = [{
+                    "project_name": s.project_name,
+                    "source": "enrichment",
+                    "readme_summary": (s.readme_summary or "")[:1000],
+                    "contributor_count": s.contributor_count,
+                } for s in batch_signals]
+                if rows:
+                    await sb.table_batch_upsert("signals", rows)
             except Exception as e:
                 logger.warning(f"Failed to write enrichment batch to DB: {e}")
 

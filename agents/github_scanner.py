@@ -79,6 +79,13 @@ _etag_cache: dict = {}
 _global_seen_urls: set = set()
 _GLOBAL_SEEN_MAX = 5000
 
+# Sort rotation: 2/3 stars, 1/3 updated — discovers different repos each scan
+_SORT_ORDERS = ["stars", "updated", "stars"]
+_scan_counter = 0
+
+# Incremental search: track last scan time per category
+_last_scan_time: dict = {}  # category -> ISO timestamp string
+
 # Global search rate limiter: GitHub Search API = 30 req/min (authenticated)
 _search_semaphore = asyncio.Semaphore(1)  # serialize search requests
 _search_count = 0
@@ -216,11 +223,35 @@ class GitHubScanner:
         except Exception:
             return 0
 
+    async def warm_dedup_cache(self):
+        """Load existing project URLs from composite_scores to avoid reprocessing on restart."""
+        global _global_seen_urls
+        try:
+            sb = get_client()
+            rows = await sb.table_select("composite_scores", query="project_url", limit=5000)
+            for row in (rows or []):
+                url = row.get("project_url", "")
+                if url:
+                    _global_seen_urls.add(url)
+            logger.info(f"Warmed dedup cache with {len(_global_seen_urls)} URLs from DB")
+        except Exception as e:
+            logger.warning(f"Failed to warm dedup cache: {e}")
+
     async def scan_category(self, category: str) -> List[GitHubSignal]:
-        """Scan a single category with pagination (up to 3 pages)."""
+        """Scan a single category with sort rotation and incremental time filter."""
+        global _scan_counter
         client = await self._get_client()
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.GITHUB_SCANNER_RECENCY_DAYS)
         signals = []
+
+        # Sort rotation
+        sort_order = _SORT_ORDERS[_scan_counter % len(_SORT_ORDERS)]
+
+        # Incremental: append pushed:>DATE if we've scanned this category before
+        q = category
+        last = _last_scan_time.get(category)
+        if last:
+            q += f" pushed:>{last[:10]}"
 
         for page in range(1, 2):  # 1 page per category to stay within 30 search req/min
             try:
@@ -229,8 +260,8 @@ class GitHubScanner:
                     client,
                     f"{GITHUB_API}/search/repositories",
                     params={
-                        "q": category,
-                        "sort": "stars",
+                        "q": q,
+                        "sort": sort_order,
                         "order": "desc",
                         "per_page": settings.GITHUB_SCANNER_PER_PAGE,
                         "page": page,
@@ -284,17 +315,22 @@ class GitHubScanner:
                     )
                     signals.append(signal)
 
-                logger.info(f"GitHub scan '{category}' page {page}: {len(repos)} repos fetched")
+                logger.info(f"GitHub scan '{category}' page {page} (sort={sort_order}): {len(repos)} repos fetched")
 
             except Exception as e:
                 logger.error(f"GitHub scan error for '{category}' page {page}: {e}")
                 break
 
+        # Record last scan time for incremental search next time
+        if signals:
+            _last_scan_time[category] = datetime.now(timezone.utc).isoformat()
+
         return signals
 
     async def scan(self, categories: Optional[List[str]] = None) -> List[GitHubSignal]:
         """Scan multiple categories with controlled parallelism and global dedup."""
-        global _global_seen_urls
+        global _global_seen_urls, _scan_counter
+        _scan_counter += 1
         cats = categories or CATEGORIES
 
         # Semaphore limits concurrent category scans to avoid GitHub burst 403s
@@ -329,20 +365,22 @@ class GitHubScanner:
         cap = settings.GITHUB_SCANNER_DB_CAP
         to_write = all_signals[:cap] if cap > 0 else all_signals
 
-        # Progressive DB writes
+        # Batch DB writes (50 rows per call instead of sequential)
         try:
             sb = get_client()
-            for signal in to_write:
-                await sb.table_upsert("signals", {
-                    "project_name": signal.project_name,
-                    "source": "github",
-                    "stars": signal.stars,
-                    "star_velocity_7d": int(round(signal.star_velocity_7d)),
-                    "contributor_count": signal.contributor_count,
-                    "description": (signal.description or "")[:500],
-                })
+            rows = [{
+                "project_name": s.project_name,
+                "source": "github",
+                "stars": s.stars,
+                "star_velocity_7d": int(round(s.star_velocity_7d)),
+                "contributor_count": s.contributor_count,
+                "description": (s.description or "")[:500],
+            } for s in to_write]
+            if rows:
+                await sb.table_batch_upsert("signals", rows)
+                logger.info(f"Batch wrote {len(rows)} github signals ({(len(rows) + 49) // 50} batches)")
         except Exception as e:
-            logger.warning(f"Failed to write github signals to DB: {e}")
+            logger.warning(f"Failed to batch write github signals to DB: {e}")
 
         update_agent_last_run("github_scanner")
         logger.info(f"GitHub scan complete: {len(all_signals)} unique projects from {len(cats)} categories")
