@@ -64,12 +64,15 @@ class GitHubScanner:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "RiseFinderAgentSwarm/1.0",
+            }
+            # Only add auth if we have a real token
+            if settings.GITHUB_TOKEN and not settings.GITHUB_TOKEN.startswith("placeholder"):
+                headers["Authorization"] = f"token {settings.GITHUB_TOKEN}"
             self._client = httpx.AsyncClient(
-                headers={
-                    "Authorization": f"token {settings.GITHUB_TOKEN}",
-                    "Accept": "application/vnd.github.v3+json",
-                    "User-Agent": "RiseFinderAgentSwarm/1.0",
-                },
+                headers=headers,
                 timeout=30.0,
             )
         return self._client
