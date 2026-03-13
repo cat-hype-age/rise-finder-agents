@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, Optional
 import numpy as np
+from scipy.stats import percentileofscore
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +17,12 @@ MAX_UNIVERSE_SIZE = 500
 
 
 def normalize(value: float, key: str) -> float:
-    """Percentile rank of value against universe[key], scaled 0-10."""
-    if key not in universe or len(universe[key]) < 10:
-        return 5.0
-    arr = np.array(universe[key])
-    percentile = float(np.sum(arr <= value) / len(arr))
-    return round(percentile * 10, 2)
+    """Percentile rank of value against universe[key], scaled 0-10 with power stretch."""
+    if key not in universe or len(universe[key]) < 3:
+        return 7.0
+    pct = percentileofscore(universe[key], value) / 100.0
+    stretched = min(pct ** 0.6 * 10, 10.0)
+    return round(stretched, 2)
 
 
 def update_universe(signals_row: dict) -> None:

@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     PORT: int = 8000
     BOT_ARMY_ENABLED: bool = True
     BOT_ARMY_MAX_CONCURRENT: int = 35
-    BOT_ARMY_SLEEP_MIN: float = 10.0
-    BOT_ARMY_SLEEP_MAX: float = 20.0
+    BOT_ARMY_SLEEP_MIN: float = 20.0
+    BOT_ARMY_SLEEP_MAX: float = 40.0
     BOT_ARMY_RAMP_FAST: bool = True
     GPU_MOCK_MODE: bool = False
     ENVIRONMENT: str = "production"

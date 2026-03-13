@@ -17,13 +17,13 @@ def recency_decay(pushed_at: Optional[str]) -> float:
             pushed = pushed_at
         now = datetime.now(timezone.utc)
         days = (now - pushed).days
-        if days < 7:
+        if days < 14:
             return 1.0
-        if days < 30:
-            return 0.7
-        if days < 90:
-            return 0.4
-        return 0.1
+        if days < 60:
+            return 0.8
+        if days < 180:
+            return 0.6
+        return 0.2
     except Exception:
         return 0.1
 
@@ -77,14 +77,14 @@ def compute_detailed(all_signals: dict) -> dict:
 
     # Market Timing (0-15)
     sector_trend = min(enrichment.get("sector_funding_trend", 0) / 10, 1) * 7
-    regulatory = min(enrichment.get("regulatory_score", 0) / 10, 1) * 4
-    comparable_exits = min(enrichment.get("comparable_exits", 0) / 5, 1) * 4
+    regulatory = min(enrichment.get("regulatory_score", 7.5) / 10, 1) * 4
+    comparable_exits = min(enrichment.get("comparable_exits", 6.0) / 5, 1) * 4
     market_timing = round(min(sector_trend + regulatory + comparable_exits, 15), 2)
 
     # Founder DNA (0-15)
     prior_exits = min(enrichment.get("prior_exits", 0) / 3, 1) * 6
     tech_cred = min(enrichment.get("technical_credibility", 0) / 10, 1) * 5
-    network_density = min(enrichment.get("network_density", 0) / 10, 1) * 4
+    network_density = min(enrichment.get("network_density", 6.0) / 10, 1) * 4
     founder_dna = round(min(prior_exits + tech_cred + network_density, 15), 2)
 
     total = round(developer_momentum + community_buzz + business_traction + market_timing + founder_dna, 2)
@@ -111,3 +111,17 @@ def compute_detailed(all_signals: dict) -> dict:
         "velocity_flag": velocity_flag,
         "anomaly_flag": anomaly_flag,
     }
+
+
+def debug_score(signals: dict) -> str:
+    """Print breakdown of each scoring dimension."""
+    detail = compute_detailed(signals)
+    dev = detail["developer_momentum"]
+    buzz = detail["community_buzz"]
+    biz = detail["business_traction"]
+    timing = detail["market_timing"]
+    founder = detail["founder_dna"]
+    total = detail["total"]
+    line = f"dev={dev}/25 buzz={buzz}/20 biz={biz}/25 timing={timing}/15 founder={founder}/15 TOTAL={total}/100"
+    print(line)
+    return line

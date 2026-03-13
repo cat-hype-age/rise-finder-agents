@@ -79,6 +79,30 @@ _etag_cache: dict = {}
 _global_seen_urls: set = set()
 _GLOBAL_SEEN_MAX = 5000
 
+# Global search rate limiter: GitHub Search API = 30 req/min (authenticated)
+_search_semaphore = asyncio.Semaphore(1)  # serialize search requests
+_search_count = 0
+_search_window_start = time.time()
+_SEARCH_LIMIT_PER_MIN = 28  # stay under 30
+
+
+async def _search_rate_limit():
+    """Global rate limiter for GitHub Search API (30 req/min)."""
+    global _search_count, _search_window_start
+    async with _search_semaphore:
+        now = time.time()
+        elapsed = now - _search_window_start
+        if elapsed >= 60:
+            _search_count = 0
+            _search_window_start = now
+        if _search_count >= _SEARCH_LIMIT_PER_MIN:
+            wait = 60 - elapsed + 1
+            logger.info(f"Search rate limit: waiting {wait:.0f}s ({_search_count} searches in {elapsed:.0f}s)")
+            await asyncio.sleep(wait)
+            _search_count = 0
+            _search_window_start = time.time()
+        _search_count += 1
+
 
 class GitHubScanner:
     def __init__(self):
@@ -198,8 +222,9 @@ class GitHubScanner:
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.GITHUB_SCANNER_RECENCY_DAYS)
         signals = []
 
-        for page in range(1, 4):
+        for page in range(1, 2):  # 1 page per category to stay within 30 search req/min
             try:
+                await _search_rate_limit()
                 resp = await self._request_with_backoff(
                     client,
                     f"{GITHUB_API}/search/repositories",
