@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from dataclasses import dataclass, field, asdict
 
-from core.config import update_agent_last_run
+from core.config import settings, update_agent_last_run
 from core.supabase_client import get_client
 from core.scoring import compute_composite, compute_detailed
 from core.normalizer import update_universe
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class InvestorQuery:
     categories: List[str] = field(default_factory=list)
-    limit: int = 20
+    limit: int = 100
     risk_profile: str = "moderate"
     stage_preference: str = "seed"
     bot_profile_name: Optional[str] = None
@@ -43,6 +43,7 @@ class Orchestrator:
         self.social_agent = SocialSignalAgent()
         self.enrichment_agent = EnrichmentAgent()
         self.memo_generator = MemoGenerator()
+        self._scored_cache: set = set()
 
     async def handle_query(self, query: InvestorQuery) -> QueryResponse:
         """Main orchestration pipeline."""
@@ -60,7 +61,7 @@ class Orchestrator:
         try:
             github_results = await asyncio.wait_for(
                 self.github_scanner.scan(query.categories or None),
-                timeout=30.0,
+                timeout=float(settings.GITHUB_SCANNER_TIMEOUT),
             )
         except asyncio.TimeoutError:
             logger.warning("GitHub scan timed out after 30s, using partial results")
@@ -79,10 +80,15 @@ class Orchestrator:
                 top_projects=[],
             )
 
+        # Filter out already-scored projects to focus on new discoveries
+        new_results = [r for r in github_results if r.project_url not in self._scored_cache]
+        if not new_results:
+            new_results = github_results  # Fall back to all if everything is cached
+
         # Extract project names and data
-        project_names = [r.project_name for r in github_results[:query.limit]]
+        project_names = [r.project_name for r in new_results[:query.limit]]
         project_data = {
-            r.project_name: r.to_dict() for r in github_results[:query.limit]
+            r.project_name: r.to_dict() for r in new_results[:query.limit]
         }
 
         # Step 2: Social + Enrichment in parallel
@@ -220,8 +226,14 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Failed to write composite scores: {e}")
 
-        # Step 4: Fire-and-forget memo generation for top 3-5
-        for project in top[:5]:
+        # Mark scored projects in cache
+        for project in top:
+            url = project["github"].get("project_url", "")
+            if url:
+                self._scored_cache.add(url)
+
+        # Step 4: Fire-and-forget memo generation for top N
+        for project in top[:settings.ORCHESTRATOR_MEMO_COUNT]:
             asyncio.create_task(
                 self._safe_memo_generate(project["project_name"], project)
             )
@@ -247,7 +259,7 @@ class Orchestrator:
                     "social_score": p["social"].get("social_score", 0),
                     "enrichment_score": p["enrichment"].get("enrichment_score", 0),
                 }
-                for p in top[:10]
+                for p in top[:settings.ORCHESTRATOR_API_RESPONSE_LIMIT]
             ],
         )
 

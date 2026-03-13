@@ -13,6 +13,7 @@ from core.supabase_client import get_client
 logger = logging.getLogger(__name__)
 
 CATEGORIES = [
+    # Original 12
     "AI agent framework",
     "LLM tooling",
     "developer productivity",
@@ -25,6 +26,25 @@ CATEGORIES = [
     "SaaS boilerplate",
     "developer tools",
     "machine learning",
+    # Expanded 18 for broader coverage
+    "vector database",
+    "RAG pipeline",
+    "code generation tool",
+    "observability platform",
+    "API gateway open source",
+    "data pipeline framework",
+    "serverless framework",
+    "cybersecurity open source",
+    "low-code platform",
+    "MLOps framework",
+    "real-time analytics",
+    "graph database",
+    "workflow automation",
+    "computer vision library",
+    "NLP toolkit",
+    "blockchain developer tools",
+    "IoT platform open source",
+    "database proxy",
 ]
 
 GITHUB_API = "https://api.github.com"
@@ -55,6 +75,10 @@ class GitHubSignal:
 # ETag cache for conditional requests
 _etag_cache: dict = {}
 
+# Global dedup cache: avoids re-processing repos across bot queries
+_global_seen_urls: set = set()
+_GLOBAL_SEEN_MAX = 5000
+
 
 class GitHubScanner:
     def __init__(self):
@@ -68,7 +92,6 @@ class GitHubScanner:
                 "Accept": "application/vnd.github.v3+json",
                 "User-Agent": "RiseFinderAgentSwarm/1.0",
             }
-            # Only add auth if we have a real token
             if settings.GITHUB_TOKEN and not settings.GITHUB_TOKEN.startswith("placeholder"):
                 headers["Authorization"] = f"token {settings.GITHUB_TOKEN}"
             self._client = httpx.AsyncClient(
@@ -138,7 +161,6 @@ class GitHubScanner:
             age_days = max((now - created_dt).days, 1)
             avg_daily = stars / age_days
 
-            # Approximate recent velocity with push recency boost
             pushed_dt = datetime.fromisoformat(pushed.replace("Z", "+00:00"))
             days_since_push = max((now - pushed_dt).days, 1)
             recency_boost = max(1.0, 3.0 - (days_since_push / 30))
@@ -171,98 +193,121 @@ class GitHubScanner:
             return 0
 
     async def scan_category(self, category: str) -> List[GitHubSignal]:
-        """Scan a single category for trending repos."""
+        """Scan a single category with pagination (up to 3 pages)."""
         client = await self._get_client()
-        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.GITHUB_SCANNER_RECENCY_DAYS)
         signals = []
 
-        try:
-            resp = await self._request_with_backoff(
-                client,
-                f"{GITHUB_API}/search/repositories",
-                params={
-                    "q": category,
-                    "sort": "stars",
-                    "order": "desc",
-                    "per_page": 50,
-                },
-            )
-            if resp is None:
-                return []
-
-            repos = resp.json().get("items", [])
-
-            for repo in repos:
-                stars = repo.get("stargazers_count", 0)
-                pushed_at = repo.get("pushed_at", "")
-
-                if stars < 50:
-                    continue
-                try:
-                    pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
-                    if pushed_dt < cutoff:
-                        continue
-                except Exception:
-                    continue
-
-                vel_7d, vel_30d = self._calculate_velocities(repo)
-                full_name = repo.get("full_name", "")
-                parts = full_name.split("/")
-                owner = parts[0] if len(parts) == 2 else ""
-                repo_name = parts[1] if len(parts) == 2 else full_name
-
-                forks = repo.get("forks_count", 0)
-                fork_accel = round(forks / max((stars or 1), 1) * 100, 2)
-
-                signal = GitHubSignal(
-                    project_name=repo.get("name", full_name),
-                    project_url=repo.get("html_url", ""),
-                    stars=stars,
-                    forks=forks,
-                    language=repo.get("language"),
-                    topics=repo.get("topics", []),
-                    description=repo.get("description", ""),
-                    star_velocity_7d=vel_7d,
-                    star_velocity_30d=vel_30d,
-                    fork_acceleration=fork_accel,
-                    contributor_count=0,
-                    last_commit_at=pushed_at,
-                    created_at=repo.get("created_at"),
-                    pushed_at=pushed_at,
-                    raw_score=round(vel_7d * 2 + stars * 0.01, 2),
+        for page in range(1, 4):
+            try:
+                resp = await self._request_with_backoff(
+                    client,
+                    f"{GITHUB_API}/search/repositories",
+                    params={
+                        "q": category,
+                        "sort": "stars",
+                        "order": "desc",
+                        "per_page": settings.GITHUB_SCANNER_PER_PAGE,
+                        "page": page,
+                    },
                 )
-                signals.append(signal)
+                if resp is None:
+                    break
 
-            logger.info(f"GitHub scan '{category}': {len(signals)} repos found")
+                repos = resp.json().get("items", [])
+                if not repos:
+                    break
 
-        except Exception as e:
-            logger.error(f"GitHub scan error for '{category}': {e}")
+                for repo in repos:
+                    stars = repo.get("stargazers_count", 0)
+                    pushed_at = repo.get("pushed_at", "")
+
+                    if stars < settings.GITHUB_SCANNER_MIN_STARS:
+                        continue
+                    try:
+                        pushed_dt = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
+                        if pushed_dt < cutoff:
+                            continue
+                    except Exception:
+                        continue
+
+                    vel_7d, vel_30d = self._calculate_velocities(repo)
+                    full_name = repo.get("full_name", "")
+                    parts = full_name.split("/")
+                    owner = parts[0] if len(parts) == 2 else ""
+                    repo_name = parts[1] if len(parts) == 2 else full_name
+
+                    forks = repo.get("forks_count", 0)
+                    fork_accel = round(forks / max((stars or 1), 1) * 100, 2)
+
+                    signal = GitHubSignal(
+                        project_name=repo.get("name", full_name),
+                        project_url=repo.get("html_url", ""),
+                        stars=stars,
+                        forks=forks,
+                        language=repo.get("language"),
+                        topics=repo.get("topics", []),
+                        description=repo.get("description", ""),
+                        star_velocity_7d=vel_7d,
+                        star_velocity_30d=vel_30d,
+                        fork_acceleration=fork_accel,
+                        contributor_count=0,
+                        last_commit_at=pushed_at,
+                        created_at=repo.get("created_at"),
+                        pushed_at=pushed_at,
+                        raw_score=round(vel_7d * 2 + stars * 0.01, 2),
+                    )
+                    signals.append(signal)
+
+                logger.info(f"GitHub scan '{category}' page {page}: {len(repos)} repos fetched")
+
+            except Exception as e:
+                logger.error(f"GitHub scan error for '{category}' page {page}: {e}")
+                break
 
         return signals
 
     async def scan(self, categories: Optional[List[str]] = None) -> List[GitHubSignal]:
-        """Scan multiple categories in parallel."""
+        """Scan multiple categories with controlled parallelism and global dedup."""
+        global _global_seen_urls
         cats = categories or CATEGORIES
-        tasks = [self.scan_category(cat) for cat in cats]
+
+        # Semaphore limits concurrent category scans to avoid GitHub burst 403s
+        sem = asyncio.Semaphore(5)
+
+        async def _bounded_scan(cat):
+            async with sem:
+                return await self.scan_category(cat)
+
+        tasks = [_bounded_scan(cat) for cat in cats]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_signals = []
-        seen = set()
         for result in results:
             if isinstance(result, Exception):
                 logger.error(f"Category scan failed: {result}")
                 continue
             for signal in result:
-                if signal.project_name not in seen:
-                    seen.add(signal.project_name)
+                # Dedup by URL (unique per repo) instead of name
+                if signal.project_url and signal.project_url not in _global_seen_urls:
+                    _global_seen_urls.add(signal.project_url)
                     all_signals.append(signal)
 
-        # Write to Supabase (schema: id uuid, source, project_name, stars int,
-        # star_velocity_7d int, social_score int, readme_summary, contributor_count int,
-        # description, created_at)
+        # Trim global cache if too large
+        if len(_global_seen_urls) > _GLOBAL_SEEN_MAX:
+            _global_seen_urls = set()
+
+        # Sort by raw score descending
+        all_signals.sort(key=lambda s: s.raw_score, reverse=True)
+
+        # Apply DB cap (0 = no cap)
+        cap = settings.GITHUB_SCANNER_DB_CAP
+        to_write = all_signals[:cap] if cap > 0 else all_signals
+
+        # Progressive DB writes
         try:
             sb = get_client()
-            for signal in all_signals[:50]:
+            for signal in to_write:
                 await sb.table_upsert("signals", {
                     "project_name": signal.project_name,
                     "source": "github",
@@ -275,7 +320,7 @@ class GitHubScanner:
             logger.warning(f"Failed to write github signals to DB: {e}")
 
         update_agent_last_run("github_scanner")
-        logger.info(f"GitHub scan complete: {len(all_signals)} unique projects")
+        logger.info(f"GitHub scan complete: {len(all_signals)} unique projects from {len(cats)} categories")
         return all_signals
 
     async def close(self):

@@ -287,33 +287,38 @@ class EnrichmentAgent:
         return signal
 
     async def enrich(self, projects: List[dict]) -> List[EnrichmentSignal]:
-        """Enrich top 20 projects in batches of 5."""
-        top_projects = projects[:20]
+        """Enrich projects in configurable batches with progressive DB writes."""
+        top_projects = projects[:settings.ENRICHMENT_MAX_PROJECTS]
         signals = []
+        sb = get_client()
 
-        for i in range(0, len(top_projects), 5):
-            batch = top_projects[i:i+5]
+        for i in range(0, len(top_projects), settings.ENRICHMENT_BATCH_SIZE):
+            batch = top_projects[i:i + settings.ENRICHMENT_BATCH_SIZE]
             tasks = [self.enrich_one(p) for p in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            batch_signals = []
             for result in results:
                 if isinstance(result, Exception):
                     logger.error(f"Enrichment failed: {result}")
                     continue
+                batch_signals.append(result)
                 signals.append(result)
 
-        # Write to Supabase (schema: no enrichment_score or data column;
-        # store enrichment results in readme_summary + contributor_count)
-        try:
-            sb = get_client()
-            for signal in signals:
-                await sb.table_upsert("signals", {
-                    "project_name": signal.project_name,
-                    "source": "enrichment",
-                    "readme_summary": (signal.readme_summary or "")[:1000],
-                    "contributor_count": signal.contributor_count,
-                })
-        except Exception as e:
-            logger.warning(f"Failed to write enrichment signals to DB: {e}")
+            # Progressive DB write after each batch
+            try:
+                for signal in batch_signals:
+                    await sb.table_upsert("signals", {
+                        "project_name": signal.project_name,
+                        "source": "enrichment",
+                        "readme_summary": (signal.readme_summary or "")[:1000],
+                        "contributor_count": signal.contributor_count,
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to write enrichment batch to DB: {e}")
+
+            batch_num = i // settings.ENRICHMENT_BATCH_SIZE + 1
+            logger.info(f"Enrichment batch {batch_num}: {len(batch_signals)} completed, {len(signals)} total")
 
         update_agent_last_run("enrichment")
         logger.info(f"Enrichment complete for {len(signals)} projects")

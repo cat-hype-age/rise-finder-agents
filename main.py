@@ -126,7 +126,7 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     categories: list[str] = Field(default_factory=list)
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=100, ge=1, le=500)
     risk_profile: str = "moderate"
     stage_preference: str = "seed"
     bot_profile_name: Optional[str] = None
@@ -265,7 +265,7 @@ async def generate_memo(request: Request, body: MemoRequest):
 async def get_scores(
     request: Request,
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=20, ge=1, le=100),
+    per_page: int = Query(default=50, ge=1, le=500),
 ):
     try:
         from core.supabase_client import get_client

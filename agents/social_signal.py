@@ -67,7 +67,7 @@ class SocialSignalAgent:
         posts = []
         seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
-        for sub in SUBREDDITS[:4]:
+        async def _fetch_subreddit(sub: str) -> list:
             try:
                 resp = await client.get(
                     f"https://www.reddit.com/r/{sub}/search.json",
@@ -82,15 +82,24 @@ class SocialSignalAgent:
                 )
                 if resp.status_code == 200:
                     data = resp.json().get("data", {}).get("children", [])
+                    found = []
                     for item in data:
                         post = item.get("data", {})
                         created = datetime.fromtimestamp(post.get("created_utc", 0), tz=timezone.utc)
                         if created >= seven_days_ago:
-                            posts.append(post)
-                await asyncio.sleep(1)
+                            found.append(post)
+                    return found
             except Exception as e:
                 logger.debug(f"Reddit search error for {project_name} in r/{sub}: {e}")
-                continue
+            return []
+
+        sub_results = await asyncio.gather(
+            *[_fetch_subreddit(sub) for sub in SUBREDDITS[:settings.SOCIAL_MAX_SUBREDDITS]],
+            return_exceptions=True,
+        )
+        for result in sub_results:
+            if isinstance(result, list):
+                posts.extend(result)
 
         if not posts:
             return {
@@ -261,8 +270,14 @@ class SocialSignalAgent:
         )
 
     async def get_signals(self, project_names: List[str]) -> List[SocialSignal]:
-        """Get social signals for multiple projects."""
-        tasks = [self.get_signals_for_project(name) for name in project_names]
+        """Get social signals for multiple projects with concurrency control."""
+        sem = asyncio.Semaphore(settings.SOCIAL_CONCURRENT_PROJECTS)
+
+        async def _bounded(name):
+            async with sem:
+                return await self.get_signals_for_project(name)
+
+        tasks = [_bounded(name) for name in project_names]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         signals = []

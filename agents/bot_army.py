@@ -11,6 +11,7 @@ from core.supabase_client import get_client
 logger = logging.getLogger(__name__)
 
 PERSONAS = [
+    # Original 15
     {"name": "Sarah Chen", "categories": ["AI/ML", "DevTools"], "risk": "aggressive", "stage": "seed"},
     {"name": "Marcus Webb", "categories": ["Fintech", "SaaS"], "risk": "moderate", "stage": "series-a"},
     {"name": "Priya Nair", "categories": ["Climate Tech", "EdTech"], "risk": "moderate", "stage": "seed"},
@@ -26,10 +27,32 @@ PERSONAS = [
     {"name": "Lior Ben-David", "categories": ["DevTools", "Robotics"], "risk": "aggressive", "stage": "pre-seed"},
     {"name": "Chioma Eze", "categories": ["EdTech", "Consumer"], "risk": "moderate", "stage": "seed"},
     {"name": "Anders Holm", "categories": ["Climate Tech", "Web3"], "risk": "aggressive", "stage": "pre-seed"},
+    # Expanded 20 for broader category coverage
+    {"name": "Mia Zhang", "categories": ["VectorDB", "RAG"], "risk": "aggressive", "stage": "seed"},
+    {"name": "Raj Patel", "categories": ["CodeGen", "DevTools"], "risk": "moderate", "stage": "series-a"},
+    {"name": "Elena Volkov", "categories": ["Observability", "DataPipeline"], "risk": "moderate", "stage": "seed"},
+    {"name": "Kwame Asante", "categories": ["Serverless", "API"], "risk": "aggressive", "stage": "pre-seed"},
+    {"name": "Sofia Mendez", "categories": ["Cybersecurity", "AI/ML"], "risk": "conservative", "stage": "series-a"},
+    {"name": "Noah Kim", "categories": ["LowCode", "SaaS"], "risk": "moderate", "stage": "seed"},
+    {"name": "Aisha Diallo", "categories": ["MLOps", "AI/ML"], "risk": "aggressive", "stage": "seed"},
+    {"name": "Tomoko Sato", "categories": ["RealTimeAnalytics", "DataPipeline"], "risk": "moderate", "stage": "series-a"},
+    {"name": "Carlos Rivera", "categories": ["GraphDB", "VectorDB"], "risk": "aggressive", "stage": "pre-seed"},
+    {"name": "Ingrid Larsen", "categories": ["Workflow", "LowCode"], "risk": "moderate", "stage": "seed"},
+    {"name": "Wei Liu", "categories": ["ComputerVision", "AI/ML"], "risk": "aggressive", "stage": "seed"},
+    {"name": "Olga Petrov", "categories": ["NLP", "AI/ML"], "risk": "moderate", "stage": "series-a"},
+    {"name": "Hassan Ali", "categories": ["Blockchain", "Web3"], "risk": "aggressive", "stage": "pre-seed"},
+    {"name": "Nkechi Okonkwo", "categories": ["IoT", "Robotics"], "risk": "moderate", "stage": "seed"},
+    {"name": "Felix Braun", "categories": ["DatabaseProxy", "DevTools"], "risk": "conservative", "stage": "series-a"},
+    {"name": "Leila Sharif", "categories": ["Cybersecurity", "Observability"], "risk": "moderate", "stage": "seed"},
+    {"name": "Jun Watanabe", "categories": ["RAG", "NLP"], "risk": "aggressive", "stage": "pre-seed"},
+    {"name": "Carmen Torres", "categories": ["Serverless", "MLOps"], "risk": "moderate", "stage": "seed"},
+    {"name": "Viktor Novak", "categories": ["API", "GraphDB"], "risk": "aggressive", "stage": "series-a"},
+    {"name": "Destiny Adebayo", "categories": ["Workflow", "Fintech"], "risk": "moderate", "stage": "seed"},
 ]
 
 # Map persona categories to GitHub search categories
 CATEGORY_MAP = {
+    # Original
     "AI/ML": ["AI agent framework", "machine learning", "LLM tooling"],
     "DevTools": ["developer tools", "developer productivity"],
     "Fintech": ["fintech open source"],
@@ -40,6 +63,25 @@ CATEGORY_MAP = {
     "Web3": ["web3 infrastructure"],
     "Robotics": ["robotics software"],
     "Consumer": ["developer productivity", "SaaS boilerplate"],
+    # Expanded
+    "VectorDB": ["vector database"],
+    "RAG": ["RAG pipeline"],
+    "CodeGen": ["code generation tool"],
+    "Observability": ["observability platform"],
+    "API": ["API gateway open source"],
+    "DataPipeline": ["data pipeline framework"],
+    "Serverless": ["serverless framework"],
+    "Cybersecurity": ["cybersecurity open source"],
+    "LowCode": ["low-code platform"],
+    "MLOps": ["MLOps framework"],
+    "RealTimeAnalytics": ["real-time analytics"],
+    "GraphDB": ["graph database"],
+    "Workflow": ["workflow automation"],
+    "ComputerVision": ["computer vision library"],
+    "NLP": ["NLP toolkit"],
+    "Blockchain": ["blockchain developer tools"],
+    "IoT": ["IoT platform open source"],
+    "DatabaseProxy": ["database proxy"],
 }
 
 
@@ -52,14 +94,24 @@ class BotArmy:
 
     def _get_max_concurrent(self) -> int:
         """Ramp schedule for bot concurrency."""
-        elapsed_min = (time.time() - self._start_time) / 60
-        if elapsed_min < 30:
-            return 2
-        elif elapsed_min < 60:
-            return 4
-        elif elapsed_min < 120:
-            return 8
-        return settings.BOT_ARMY_MAX_CONCURRENT
+        if settings.BOT_ARMY_RAMP_FAST:
+            elapsed_min = (time.time() - self._start_time) / 60
+            if elapsed_min < 2:
+                return 10
+            elif elapsed_min < 5:
+                return 20
+            elif elapsed_min < 10:
+                return 30
+            return settings.BOT_ARMY_MAX_CONCURRENT
+        else:
+            elapsed_min = (time.time() - self._start_time) / 60
+            if elapsed_min < 30:
+                return 2
+            elif elapsed_min < 60:
+                return 4
+            elif elapsed_min < 120:
+                return 8
+            return settings.BOT_ARMY_MAX_CONCURRENT
 
     async def _run_bot(self, persona: dict):
         """Single bot loop."""
@@ -67,7 +119,7 @@ class BotArmy:
         bot_name = persona["name"]
         port = settings.PORT
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             while self._running:
                 try:
                     # Pick random subset of categories
@@ -79,7 +131,7 @@ class BotArmy:
 
                     query_params = {
                         "categories": search_categories,
-                        "limit": random.randint(5, 20),
+                        "limit": random.randint(20, 100),
                         "risk_profile": persona["risk"],
                         "stage_preference": persona["stage"],
                         "bot_profile_name": bot_name,
@@ -124,14 +176,19 @@ class BotArmy:
                 except Exception as e:
                     logger.warning(f"Bot '{bot_name}' error: {e}")
 
-                # Sleep 30-60 seconds between runs
-                await asyncio.sleep(random.uniform(30, 60))
+                # Configurable sleep between runs
+                await asyncio.sleep(random.uniform(
+                    settings.BOT_ARMY_SLEEP_MIN,
+                    settings.BOT_ARMY_SLEEP_MAX,
+                ))
 
     async def run(self):
         """Main bot army loop with ramping concurrency."""
         self._running = True
         self._start_time = time.time()
-        logger.info("Bot army starting with ramp schedule")
+        logger.info(f"Bot army starting: {len(PERSONAS)} personas, "
+                     f"ramp_fast={settings.BOT_ARMY_RAMP_FAST}, "
+                     f"max={settings.BOT_ARMY_MAX_CONCURRENT}")
 
         active_personas = []
 
@@ -149,7 +206,7 @@ class BotArmy:
                 logger.info(f"Bot army: activated '{persona['name']}' ({current}/{max_concurrent} active)")
 
             update_agent_last_run("bot_army")
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
 
     def stop(self):
         """Stop all bots."""
