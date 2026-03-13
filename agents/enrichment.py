@@ -30,6 +30,7 @@ class EnrichmentSignal:
     has_funding_signal: bool = False
     funding_keywords_found: list = None
     enrichment_score: float = 0.0
+    contact_email: str = ""
 
     def __post_init__(self):
         if self.funding_keywords_found is None:
@@ -172,6 +173,50 @@ class EnrichmentAgent:
 
         return ""
 
+    async def _get_maintainer_email(self, client: httpx.AsyncClient, owner: str, repo: str, project_name: str) -> str:
+        """Try npm, PyPI, then GitHub profile to find a maintainer email."""
+        # 1. npm registry
+        try:
+            resp = await client.get(
+                f"https://registry.npmjs.org/{project_name}",
+                timeout=8.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                maintainers = data.get("maintainers", [])
+                if maintainers and maintainers[0].get("email"):
+                    return maintainers[0]["email"]
+        except Exception:
+            pass
+
+        # 2. PyPI
+        try:
+            resp = await client.get(
+                f"https://pypi.org/pypi/{project_name}/json",
+                timeout=8.0,
+            )
+            if resp.status_code == 200:
+                email = resp.json().get("info", {}).get("author_email", "")
+                if email and "@" in email:
+                    return email.split(",")[0].strip()
+        except Exception:
+            pass
+
+        # 3. GitHub user profile (public email)
+        try:
+            resp = await client.get(
+                f"https://api.github.com/users/{owner}",
+                timeout=8.0,
+            )
+            if resp.status_code == 200:
+                email = resp.json().get("email", "")
+                if email and "@" in email:
+                    return email
+        except Exception:
+            pass
+
+        return ""
+
     async def enrich_one(self, project: dict) -> EnrichmentSignal:
         """Enrich a single project."""
         project_name = project.get("project_name", "unknown")
@@ -206,8 +251,11 @@ class EnrichmentAgent:
             funding_keywords.extend(desc_kw)
             funding_keywords = list(set(funding_keywords))
 
-        # Contributor count
-        contrib_count = await self._get_contributor_count(client, owner, repo)
+        # Contributor count + maintainer email in parallel
+        contrib_count, contact_email = await asyncio.gather(
+            self._get_contributor_count(client, owner, repo),
+            self._get_maintainer_email(client, owner, repo, project_name),
+        )
 
         # Calculate enrichment score
         readme_score = (
@@ -230,7 +278,11 @@ class EnrichmentAgent:
             has_funding_signal=has_funding,
             funding_keywords_found=funding_keywords,
             enrichment_score=total,
+            contact_email=contact_email,
         )
+
+        if contact_email:
+            logger.info(f"Found email for {project_name}: {contact_email}")
 
         return signal
 

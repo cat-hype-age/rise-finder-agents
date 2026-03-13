@@ -215,6 +215,7 @@ class Orchestrator:
                     "twitter_mentions": soc.get("x_mentions_7d", 0),
                     "twitter_engagement": 0,
                     "hn_points": soc.get("hn_total_points", 0),
+                    "contact_email": enr.get("contact_email", ""),
                 })
         except Exception as e:
             logger.warning(f"Failed to write composite scores: {e}")
